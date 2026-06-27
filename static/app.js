@@ -1,10 +1,10 @@
-﻿// =====================================================
+// =====================================================
 // API BASE URL CONFIGURATION
 // - Local dev: FastAPI serves both frontend and API on same origin â†’ use relative paths ""
 // - Production (Vercel frontend + Render backend): use absolute Render URL
 // After deploying to Render, replace the URL below with your actual Render URL
 // =====================================================
-const RENDER_BACKEND_URL = "https://soil-test-api.onrender.com"; // â† UPDATE THIS after Render deploy
+const RENDER_BACKEND_URL = "https://soil-test-9mzh.onrender.com"; // â† UPDATE THIS after Render deploy
 const IS_LOCAL = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
 const API_BASE = IS_LOCAL ? "" : RENDER_BACKEND_URL;
 
