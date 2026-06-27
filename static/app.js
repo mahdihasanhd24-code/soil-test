@@ -1,10 +1,7 @@
 // =====================================================
 // API BASE URL CONFIGURATION
-// - Local dev: FastAPI serves both frontend and API on same origin â†’ use relative paths ""
-// - Production (Vercel frontend + Render backend): use absolute Render URL
-// After deploying to Render, replace the URL below with your actual Render URL
 // =====================================================
-const RENDER_BACKEND_URL = "https://soil-test-9mzh.onrender.com"; // â† UPDATE THIS after Render deploy
+const RENDER_BACKEND_URL = "https://soil-test-9mzh.onrender.com";
 const IS_LOCAL = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
 const API_BASE = IS_LOCAL ? "" : RENDER_BACKEND_URL;
 
@@ -19,7 +16,6 @@ let liveChart = null;
 let availableClasses = [];
 let uploadedClassesInSession = [];
 let sessionUploadSummary = {};
-let lastSpeechText = "";
 
 // Init on load
 document.addEventListener('DOMContentLoaded', () => {
@@ -290,8 +286,12 @@ async function analyzeSoil() {
     btn.innerHTML = `<span class="status-dot green animate-pulse"></span> Analyzing...`;
     btn.setAttribute('disabled', 'true');
     
+    const modelSelect = document.getElementById('predict-model-select');
+    const modelType = modelSelect ? modelSelect.value : 'svm';
+    
     const formData = new FormData();
     formData.append('file', selectedFile);
+    formData.append('model_type', modelType);
     
     try {
         const res = await fetch(API_BASE + '/api/predict', {
@@ -345,43 +345,11 @@ async function analyzeSoil() {
         });
         
         showToast('Classification analysis complete!', 'success');
-        
-        // Speak result aloud
-        const speechText = `The analysis indicates this sample is ${data.predicted_class} with a confidence score of ${data.confidence.toFixed(0)} percent. This soil is suitable for ${data.info.suitability}`;
-        lastSpeechText = speechText;
-        speakResult(speechText);
     } catch {
         showToast('Server connection error during prediction.', 'error');
     } finally {
         btn.innerHTML = originalText;
         btn.removeAttribute('disabled');
-    }
-}
-
-// Text-To-Speech helper
-function speakResult(text) {
-    if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel(); // cancel any active speech
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.rate = 0.95;
-        utterance.pitch = 1.0;
-        
-        // Find English voice
-        const voices = window.speechSynthesis.getVoices();
-        const englishVoice = voices.find(v => v.lang.startsWith('en'));
-        if (englishVoice) {
-            utterance.voice = englishVoice;
-        }
-        window.speechSynthesis.speak(utterance);
-    }
-}
-
-// Replay classification announcement
-function replaySpeech() {
-    if (lastSpeechText) {
-        speakResult(lastSpeechText);
-    } else {
-        showToast('No classification results to read aloud yet.', 'info');
     }
 }
 
@@ -527,39 +495,31 @@ function resetTrainingForm() {
 }
 
 function updateLiveChart(history) {
-    const epochs = history.map(h => h.epoch);
-    const loss = history.map(h => h.loss);
+    const modelNames = history.map(h => {
+        if (h.epoch === 1) return 'SVM';
+        if (h.epoch === 2) return 'KNN';
+        if (h.epoch === 3) return 'Decision Tree';
+        return `Model ${h.epoch}`;
+    });
     const accuracy = history.map(h => h.accuracy * 100);
-    const val_loss = history.map(h => h.val_loss);
-    const val_accuracy = history.map(h => h.val_accuracy * 100);
     
     if (liveChart) {
-        liveChart.data.labels = epochs;
+        liveChart.data.labels = modelNames;
         liveChart.data.datasets[0].data = accuracy;
-        liveChart.data.datasets[1].data = val_accuracy;
         liveChart.update();
     } else {
         const ctx = document.getElementById('live-training-chart').getContext('2d');
         liveChart = new Chart(ctx, {
-            type: 'line',
+            type: 'bar',
             data: {
-                labels: epochs,
+                labels: modelNames,
                 datasets: [
                     {
-                        label: 'Train Acc (%)',
+                        label: 'Test Accuracy (%)',
                         data: accuracy,
-                        borderColor: '#10b981',
-                        borderWidth: 2,
-                        tension: 0.2,
-                        fill: false
-                    },
-                    {
-                        label: 'Val Acc (%)',
-                        data: val_accuracy,
-                        borderColor: '#d97706',
-                        borderWidth: 2,
-                        tension: 0.2,
-                        fill: false
+                        backgroundColor: ['rgba(16, 185, 129, 0.7)', 'rgba(59, 130, 246, 0.7)', 'rgba(217, 119, 6, 0.7)'],
+                        borderColor: ['#10b981', '#3b82f6', '#d97706'],
+                        borderWidth: 1.5
                     }
                 ]
             },
@@ -567,29 +527,33 @@ function updateLiveChart(history) {
                 responsive: true,
                 maintainAspectRatio: false,
                 plugins: {
-                    legend: { labels: { color: '#94a3b8', font: { family: 'Outfit' } } }
+                    legend: { display: false }
                 },
                 scales: {
-                    x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } },
-                    y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } }
+                    x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8', font: { family: 'Outfit' } } },
+                    y: { min: 0, max: 100, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8', font: { family: 'Outfit' } } }
                 }
             }
         });
     }
 }
 
+// let cachedMetricsData = null;
+
 // API: Load Performance Reports Tab
 async function loadMetricsReports() {
     try {
         const res = await fetch(API_BASE + '/api/metrics');
         if (!res.ok) {
-            // No model metrics found, show empty state or hide report blocks
             showToast('Trained model evaluation metrics not available yet.', 'error');
             return;
         }
         
         const data = await res.json();
-        activeCMData = data.confusion_matrix;
+        cachedMetricsData = data;
+        
+        // Render comparison charts
+        renderComparisonCharts(data.comparison);
         
         // Fill class badges
         const badgesContainer = document.getElementById('metrics-classes-pills');
@@ -601,23 +565,116 @@ async function loadMetricsReports() {
             badgesContainer.appendChild(span);
         });
         
-        // KPIs
-        document.getElementById('kpi-accuracy').textContent = `${(data.overall.accuracy * 100).toFixed(2)}%`;
-        document.getElementById('kpi-precision').textContent = `${(data.overall.precision * 100).toFixed(2)}%`;
-        document.getElementById('kpi-recall').textContent = `${(data.overall.recall * 100).toFixed(2)}%`;
-        document.getElementById('kpi-f1').textContent = `${(data.overall.f1_score * 100).toFixed(2)}%`;
-        
-        // Render Heatmap Matrix
-        renderConfusionMatrix(data.confusion_matrix);
-        
-        // Render ROC Curve Chart
-        renderROCChart(data.roc_auc);
-        
-        // Render History Charts
-        renderHistoryCharts(data.training_history);
-    } catch {
+        // Load details for the currently selected inspect model
+        const select = document.getElementById('metrics-model-select');
+        const modelKey = select ? select.value : 'svm';
+        showModelDetailedReports(modelKey);
+    } catch (err) {
+        console.error(err);
         showToast('Error importing evaluation reports.', 'error');
     }
+}
+
+function showModelDetailedReports(modelKey) {
+    if (!cachedMetricsData || !cachedMetricsData.models || !cachedMetricsData.models[modelKey]) return;
+    
+    const modelData = cachedMetricsData.models[modelKey];
+    activeCMData = modelData.confusion_matrix;
+    
+    // KPIs
+    document.getElementById('kpi-accuracy').textContent = `${(modelData.overall.accuracy * 100).toFixed(2)}%`;
+    document.getElementById('kpi-precision').textContent = `${(modelData.overall.precision * 100).toFixed(2)}%`;
+    document.getElementById('kpi-recall').textContent = `${(modelData.overall.recall * 100).toFixed(2)}%`;
+    document.getElementById('kpi-f1').textContent = `${(modelData.overall.f1_score * 100).toFixed(2)}%`;
+    
+    // Render Heatmap Matrix
+    renderConfusionMatrix(modelData.confusion_matrix);
+    
+    // Render ROC Curve Chart
+    renderROCChart(modelData.roc_auc);
+}
+
+function changeReportModel(modelKey) {
+    showModelDetailedReports(modelKey);
+}
+
+function renderComparisonCharts(comparison) {
+    if (lossChart) lossChart.destroy();
+    if (accChart) accChart.destroy();
+    
+    const labels = comparison.classes;
+    
+    // Accuracy & F1-Score Chart
+    const ctxLoss = document.getElementById('history-loss-chart').getContext('2d');
+    lossChart = new Chart(ctxLoss, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: 'Accuracy (%)',
+                    data: comparison.accuracy.map(val => val * 100),
+                    backgroundColor: 'rgba(16, 185, 129, 0.7)',
+                    borderColor: '#10b981',
+                    borderWidth: 1.5
+                },
+                {
+                    label: 'F1-Score (%)',
+                    data: comparison.f1_score.map(val => val * 100),
+                    backgroundColor: 'rgba(139, 92, 246, 0.7)',
+                    borderColor: '#8b5cf6',
+                    borderWidth: 1.5
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { labels: { color: '#94a3b8', font: { family: 'Outfit' } } }
+            },
+            scales: {
+                x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8', font: { family: 'Outfit' } } },
+                y: { min: 0, max: 100, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8', font: { family: 'Outfit' } } }
+            }
+        }
+    });
+    
+    // Precision & Recall Chart
+    const ctxAcc = document.getElementById('history-acc-chart').getContext('2d');
+    accChart = new Chart(ctxAcc, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: 'Precision (%)',
+                    data: comparison.precision.map(val => val * 100),
+                    backgroundColor: 'rgba(59, 130, 246, 0.7)',
+                    borderColor: '#3b82f6',
+                    borderWidth: 1.5
+                },
+                {
+                    label: 'Recall (%)',
+                    data: comparison.recall.map(val => val * 100),
+                    backgroundColor: 'rgba(217, 119, 6, 0.7)',
+                    borderColor: '#d97706',
+                    borderWidth: 1.5
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { labels: { color: '#94a3b8', font: { family: 'Outfit' } } }
+            },
+            scales: {
+                x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8', font: { family: 'Outfit' } } },
+                y: { min: 0, max: 100, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8', font: { family: 'Outfit' } } }
+            }
+        }
+    });
 }
 
 // Render Confusion Matrix
@@ -753,90 +810,6 @@ function renderROCChart(rocData) {
                     grid: { color: 'rgba(255,255,255,0.05)' },
                     ticks: { color: '#94a3b8' }
                 }
-            }
-        }
-    });
-}
-
-// Render Historical Curves
-function renderHistoryCharts(history) {
-    if (lossChart) lossChart.destroy();
-    if (accChart) accChart.destroy();
-    
-    const epochs = history.epochs;
-    
-    // Loss Chart
-    const ctxLoss = document.getElementById('history-loss-chart').getContext('2d');
-    lossChart = new Chart(ctxLoss, {
-        type: 'line',
-        data: {
-            labels: epochs,
-            datasets: [
-                {
-                    label: 'Training Loss',
-                    data: history.loss,
-                    borderColor: '#f59e0b',
-                    borderWidth: 2,
-                    tension: 0.2,
-                    fill: false
-                },
-                {
-                    label: 'Validation Loss',
-                    data: history.val_loss,
-                    borderColor: '#ef4444',
-                    borderWidth: 2,
-                    tension: 0.2,
-                    fill: false
-                }
-            ]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { labels: { color: '#94a3b8', font: { family: 'Outfit' } } }
-            },
-            scales: {
-                x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } },
-                y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } }
-            }
-        }
-    });
-    
-    // Accuracy Chart
-    const ctxAcc = document.getElementById('history-acc-chart').getContext('2d');
-    accChart = new Chart(ctxAcc, {
-        type: 'line',
-        data: {
-            labels: epochs,
-            datasets: [
-                {
-                    label: 'Training Accuracy',
-                    data: history.accuracy.map(a => a * 100),
-                    borderColor: '#10b981',
-                    borderWidth: 2,
-                    tension: 0.2,
-                    fill: false
-                },
-                {
-                    label: 'Validation Accuracy',
-                    data: history.val_accuracy.map(a => a * 100),
-                    borderColor: '#3b82f6',
-                    borderWidth: 2,
-                    tension: 0.2,
-                    fill: false
-                }
-            ]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { labels: { color: '#94a3b8', font: { family: 'Outfit' } } }
-            },
-            scales: {
-                x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } },
-                y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } }
             }
         }
     });
@@ -1187,5 +1160,4 @@ function clearUploadSession() {
     resetUploadForm();
     showToast('Session upload staging cleared.', 'success');
 }
-
 

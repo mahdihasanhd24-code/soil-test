@@ -1,45 +1,64 @@
 import os
 import json
+import time
+import pickle
 import numpy as np
+from PIL import Image
 from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score, confusion_matrix, roc_curve, auc
-import joblib
 
-# Import feature extractor helper
-from feature_extractor import extract_all_features_dict, get_feature_vector_by_setting
+def extract_features(img, img_size=(32, 32)):
+    img = img.convert('RGB')
+    
+    # 1. Resize and get raw pixel features
+    img_resized = img.resize(img_size)
+    pixels = np.array(img_resized, dtype=np.float32).flatten() / 255.0
+    
+    # 2. Extract mean and std of R, G, B channels
+    img_np = np.array(img, dtype=np.float32) / 255.0
+    mean_rgb = img_np.mean(axis=(0, 1))
+    std_rgb = img_np.std(axis=(0, 1))
+    
+    # 3. Extract RGB color histograms (8 bins per channel -> 24 features)
+    hist_r, _ = np.histogram(img_np[:,:,0], bins=8, range=(0, 1))
+    hist_g, _ = np.histogram(img_np[:,:,1], bins=8, range=(0, 1))
+    hist_b, _ = np.histogram(img_np[:,:,2], bins=8, range=(0, 1))
+    
+    # Normalize histograms
+    sum_r = np.sum(hist_r)
+    sum_g = np.sum(hist_g)
+    sum_b = np.sum(hist_b)
+    hist_r = hist_r / sum_r if sum_r > 0 else hist_r
+    hist_g = hist_g / sum_g if sum_g > 0 else hist_g
+    hist_b = hist_b / sum_b if sum_b > 0 else hist_b
+    
+    # Combine all features (3072 + 6 + 24 = 3102 features)
+    features = np.concatenate([pixels, mean_rgb, std_rgb, hist_r, hist_g, hist_b])
+    return features
 
-class APIProgressCallback:
-    """
-    Progress tracker matching the FastAPI monitoring file requirements.
-    Writes real-time status and logs to training_status.json.
-    """
-    def __init__(self, status_filepath):
-        self.status_filepath = status_filepath
-        self.logs_list = ["[INFO] Initializing classical ML training pipeline..."]
-        self.save_status()
-
-    def save_status(self, progress=0, status="training", current_epoch=0, total_epochs=10, metrics=None):
-        if metrics is None:
-            metrics = {"loss": 0.0, "accuracy": 0.0, "val_loss": 0.0, "val_accuracy": 0.0}
-            
-        status_data = {
-            "status": status,
-            "progress": progress,
-            "current_epoch": current_epoch,
-            "total_epochs": total_epochs,
-            "metrics": metrics,
-            "history": [],
-            "logs": self.logs_list
-        }
-        with open(self.status_filepath, 'w') as f:
-            json.dump(status_data, f, indent=2)
-
-    def log(self, message, progress=0, status="training", current_epoch=0, total_epochs=10, metrics=None):
-        self.logs_list.append(message)
-        self.save_status(progress, status, current_epoch, total_epochs, metrics)
+def load_split_dataset(split_dir, split_name, selected_classes, img_size=(32, 32)):
+    X, y = [], []
+    directory = os.path.join(split_dir, split_name)
+    if not os.path.exists(directory):
+        raise FileNotFoundError(f"Split directory {directory} does not exist.")
+        
+    for label_idx, cls in enumerate(selected_classes):
+        cls_dir = os.path.join(directory, cls)
+        if not os.path.exists(cls_dir):
+            continue
+        for f in os.listdir(cls_dir):
+            if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.webp')):
+                path = os.path.join(cls_dir, f)
+                try:
+                    with Image.open(path) as img:
+                        feats = extract_features(img, img_size)
+                        X.append(feats)
+                        y.append(label_idx)
+                except Exception:
+                    pass
+    return np.array(X), np.array(y)
 
 def downsample_curve(fpr, tpr, n_points=50):
     if len(fpr) <= n_points:
@@ -47,243 +66,361 @@ def downsample_curve(fpr, tpr, n_points=50):
     indices = np.linspace(0, len(fpr) - 1, n_points, dtype=int)
     return fpr[indices].tolist(), tpr[indices].tolist()
 
-def load_split_features(split_dir, selected_classes, progress_callback, split_name="train", progress_base=10):
-    """
-    Loads all images from split_dir/split_name, extracts features, and returns X and y.
-    """
-    split_path = os.path.join(split_dir, split_name)
-    X = []
-    y = []
-    
-    # Supported image extensions
-    valid_extensions = ('.jpg', '.jpeg', '.png', '.bmp', '.webp')
-    
-    # First, count total images to track percentage progress
-    total_images = 0
-    for class_idx, class_name in enumerate(selected_classes):
-        class_path = os.path.join(split_path, class_name)
-        if os.path.exists(class_path):
-            total_images += len([f for f in os.listdir(class_path) if f.lower().endswith(valid_extensions)])
-            
-    if total_images == 0:
-        raise ValueError(f"No images found in split directory: {split_path}")
-        
-    progress_callback.log(f"[INFO] Extracting features for '{split_name}' set ({total_images} images)...", progress=progress_base)
-    
-    processed_count = 0
-    for class_idx, class_name in enumerate(selected_classes):
-        class_path = os.path.join(split_path, class_name)
-        if not os.path.exists(class_path):
-            continue
-            
-        files = [f for f in os.listdir(class_path) if f.lower().endswith(valid_extensions)]
-        for f in files:
-            img_path = os.path.join(class_path, f)
-            try:
-                # Extract all 6 feature groups
-                feats_dict = extract_all_features_dict(img_path)
-                # Use All Features (Setting 12)
-                feat_vector = get_feature_vector_by_setting(feats_dict, setting_num=12)
-                X.append(feat_vector)
-                y.append(class_idx)
-            except Exception as ex:
-                # Fallback silently or log warning
-                pass
-                
-            processed_count += 1
-            if processed_count % 30 == 0 or processed_count == total_images:
-                pct = progress_base + int((processed_count / total_images) * 20)
-                progress_callback.save_status(progress=min(pct, progress_base + 20))
-                
-    return np.array(X), np.array(y)
+def save_status(status_filepath, status="training", progress=0, current_epoch=0, total_epochs=3, metrics=None, logs=None, history=None):
+    status_data = {
+        "status": status,
+        "progress": progress,
+        "current_epoch": current_epoch,
+        "total_epochs": total_epochs,
+        "metrics": metrics or {"loss": 0.0, "accuracy": 0.0, "val_loss": 0.0, "val_accuracy": 0.0},
+        "history": history or [],
+        "logs": logs or []
+    }
+    with open(status_filepath, 'w') as f:
+        json.dump(status_data, f, indent=2)
 
-def train_and_evaluate(selected_classes, epochs=10, batch_size=32, learning_rate=0.001, 
-                       split_dir=None, models_dir=None):
-    
-    # Resolve default paths relative to this script location
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    if split_dir is None:
-        split_dir = os.path.join(script_dir, "dataset_split")
-    if models_dir is None:
-        models_dir = os.path.join(script_dir, "models")
+def plot_comparison(svm_overall, knn_overall, dt_overall, output_path):
+    try:
+        import matplotlib.pyplot as plt
+        metrics = ['Accuracy', 'Precision', 'Recall', 'F1-Score']
+        svm_vals = [svm_overall['accuracy'], svm_overall['precision'], svm_overall['recall'], svm_overall['f1_score']]
+        knn_vals = [knn_overall['accuracy'], knn_overall['precision'], knn_overall['recall'], knn_overall['f1_score']]
+        dt_vals = [dt_overall['accuracy'], dt_overall['precision'], dt_overall['recall'], dt_overall['f1_score']]
         
+        x = np.arange(len(metrics))
+        width = 0.25
+        
+        fig, ax = plt.subplots(figsize=(8, 5))
+        rects1 = ax.bar(x - width, svm_vals, width, label='SVM', color='#10b981')
+        rects2 = ax.bar(x, knn_vals, width, label='KNN', color='#3b82f6')
+        rects3 = ax.bar(x + width, dt_vals, width, label='Decision Tree', color='#d97706')
+        
+        ax.set_ylabel('Score (0-1)')
+        ax.set_title('Soil Classifier Performance Comparison')
+        ax.set_xticks(x)
+        ax.set_xticklabels(metrics)
+        ax.set_ylim(0, 1.1)
+        ax.legend()
+        
+        def autolabel(rects):
+            for rect in rects:
+                height = rect.get_height()
+                ax.annotate(f'{height*100:.1f}%',
+                            xy=(rect.get_x() + rect.get_width() / 2, height),
+                            xytext=(0, 3),
+                            textcoords="offset points",
+                            ha='center', va='bottom', fontsize=8)
+                
+        autolabel(rects1)
+        autolabel(rects2)
+        autolabel(rects3)
+        
+        fig.tight_layout()
+        plt.savefig(output_path, dpi=150)
+        plt.close()
+    except Exception as e:
+        print(f"Error plotting comparison: {e}")
+
+def plot_confusion_matrix_img(cm, classes, title, output_path):
+    try:
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(6, 5))
+        im = ax.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
+        ax.figure.colorbar(im, ax=ax)
+        
+        short_classes = [c.replace(' Soil', '') for c in classes]
+        ax.set(xticks=np.arange(cm.shape[1]),
+               yticks=np.arange(cm.shape[0]),
+               xticklabels=short_classes,
+               yticklabels=short_classes,
+               title=title,
+               ylabel='True label',
+               xlabel='Predicted label')
+        
+        plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+        
+        fmt = 'd'
+        thresh = cm.max() / 2.
+        for i in range(cm.shape[0]):
+            for j in range(cm.shape[1]):
+                ax.text(j, i, format(cm[i, j], fmt),
+                        ha="center", va="center",
+                        color="white" if cm[i, j] > thresh else "black")
+        fig.tight_layout()
+        plt.savefig(output_path, dpi=150)
+        plt.close()
+    except Exception as e:
+        print(f"Error plotting confusion matrix: {e}")
+
+def plot_roc_curves_img(roc_auc_data, title, output_path):
+    try:
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(6, 5))
+        
+        for cls, data in roc_auc_data.items():
+            ax.plot(data['fpr'], data['tpr'], label=f'{cls} (AUC = {data["auc"]:.3f})')
+            
+        ax.plot([0, 1], [0, 1], 'k--', label='Random Guess')
+        ax.set_xlim([0.0, 1.0])
+        ax.set_ylim([0.0, 1.05])
+        ax.set_xlabel('False Positive Rate')
+        ax.set_ylabel('True Positive Rate')
+        ax.set_title(title)
+        ax.legend(loc="lower right", fontsize=8)
+        fig.tight_layout()
+        plt.savefig(output_path, dpi=150)
+        plt.close()
+    except Exception as e:
+        print(f"Error plotting ROC curves: {e}")
+
+def compute_model_metrics(model, X_test, y_test, selected_classes):
+    y_pred = model.predict(X_test)
+    y_pred_probs = model.predict_proba(X_test)
+    
+    accuracy = float(accuracy_score(y_test, y_pred))
+    precision = float(precision_score(y_test, y_pred, average='weighted', zero_division=0))
+    recall = float(recall_score(y_test, y_pred, average='weighted', zero_division=0))
+    f1 = float(f1_score(y_test, y_pred, average='weighted', zero_division=0))
+    
+    cm = confusion_matrix(y_test, y_pred, labels=list(range(len(selected_classes))))
+    cm_data = {
+        "classes": selected_classes,
+        "matrix": cm.tolist()
+    }
+    
+    roc_auc_data = {}
+    for i, cls in enumerate(selected_classes):
+        y_true_binary = (y_test == i).astype(int)
+        probs_cls = y_pred_probs[:, i]
+        
+        if len(np.unique(y_true_binary)) > 1:
+            fpr, tpr, _ = roc_curve(y_true_binary, probs_cls)
+            roc_auc = float(auc(fpr, tpr))
+            fpr_ds, tpr_ds = downsample_curve(fpr, tpr, n_points=50)
+        else:
+            fpr_ds, tpr_ds = [0.0, 1.0], [0.0, 1.0]
+            roc_auc = 0.5
+        
+        roc_auc_data[cls] = {
+            "fpr": fpr_ds,
+            "tpr": tpr_ds,
+            "auc": roc_auc
+        }
+        
+    return {
+        "overall": {
+            "accuracy": accuracy,
+            "precision": precision,
+            "recall": recall,
+            "f1_score": f1
+        },
+        "confusion_matrix": cm_data,
+        "roc_auc": roc_auc_data
+    }
+
+def train_and_evaluate(selected_classes, epochs=10, batch_size=32, learning_rate=0.001,
+                       split_dir=None,
+                       models_dir=None):
+    base_path = os.path.dirname(os.path.abspath(__file__))
+    if split_dir is None:
+        split_dir = os.path.join(base_path, "DataSet")
+    if models_dir is None:
+        models_dir = os.path.join(base_path, "models")
+    # If split_dir does not contain train/val/test subfolders, create them by splitting the dataset
+    import random, shutil
+    required_splits = ['train', 'val', 'test']
+    if not all(os.path.isdir(os.path.join(split_dir, s)) for s in required_splits):
+        # Expect original dataset structure: class subfolders directly under split_dir
+        # Create a new folder 'dataset_split' to store splits
+        split_root = os.path.join(os.path.dirname(split_dir), 'dataset_split')
+        os.makedirs(split_root, exist_ok=True)
+        for split in required_splits:
+            os.makedirs(os.path.join(split_root, split), exist_ok=True)
+        # Gather class directories
+        class_dirs = [d for d in os.listdir(split_dir) if os.path.isdir(os.path.join(split_dir, d))]
+        for cls in class_dirs:
+            src_cls_dir = os.path.join(split_dir, cls)
+            files = [f for f in os.listdir(src_cls_dir) if os.path.isfile(os.path.join(src_cls_dir, f))]
+            random.shuffle(files)
+            n = len(files)
+            train_end = int(0.7 * n)
+            val_end = int(0.85 * n)
+            splits = {
+                'train': files[:train_end],
+                'val': files[train_end:val_end],
+                'test': files[val_end:]
+            }
+            for split_name, split_files in splits.items():
+                dest_dir = os.path.join(split_root, split_name, cls)
+                os.makedirs(dest_dir, exist_ok=True)
+                for f in split_files:
+                    shutil.copy2(os.path.join(src_cls_dir, f), dest_dir)
+        # Update split_dir to point to the newly created splits
+        split_dir = split_root
+
+    
     os.makedirs(models_dir, exist_ok=True)
     status_filepath = os.path.join(models_dir, "training_status.json")
     metrics_filepath = os.path.join(models_dir, "soil_metrics.json")
-    model_filepath = os.path.join(models_dir, "soil_model.joblib")
     
-    progress_callback = APIProgressCallback(status_filepath)
+    logs_list = ["[INFO] Initializing ML training pipeline (SVM, KNN, Decision Tree)..."]
+    save_status(status_filepath, status="training", progress=5, current_epoch=0, total_epochs=3, logs=logs_list)
     
     try:
-        # 1. Extract features for Train, Val, and Test
-        X_train, y_train = load_split_features(split_dir, selected_classes, progress_callback, "train", progress_base=10)
-        X_val, y_val = load_split_features(split_dir, selected_classes, progress_callback, "val", progress_base=35)
-        X_test, y_test = load_split_features(split_dir, selected_classes, progress_callback, "test", progress_base=60)
+        # 1. Load Datasets and extract features
+        logs_list.append("[INFO] Loading split dataset directories and extracting features (32x32 pixels, color mean/std, histograms)...")
+        save_status(status_filepath, status="training", progress=10, current_epoch=0, total_epochs=3, logs=logs_list)
         
-        progress_callback.log(f"[INFO] Features successfully extracted. Train: {len(X_train)}, Val: {len(X_val)}, Test: {len(X_test)}", progress=80)
+        X_train, y_train = load_split_dataset(split_dir, "train", selected_classes)
+        X_val, y_val = load_split_dataset(split_dir, "val", selected_classes)
+        X_test, y_test = load_split_dataset(split_dir, "test", selected_classes)
         
-        # 2. Scaling
-        scaler = StandardScaler()
-        X_train_scaled = scaler.fit_transform(X_train)
-        X_val_scaled = scaler.transform(X_val)
-        X_test_scaled = scaler.transform(X_test)
+        logs_list.append(f"[INFO] Loaded {len(X_train)} train, {len(X_val)} validation, {len(X_test)} test samples.")
+        save_status(status_filepath, status="training", progress=25, current_epoch=0, total_epochs=3, logs=logs_list)
         
-        # 3. Train Classifiers
-        progress_callback.log("[INFO] Training SVM, KNN, and Decision Tree models...", progress=85)
+        model_metrics = {}
+        history = []
         
-        svm_model = SVC(probability=True, kernel='rbf', random_state=42)
+        # 2. Train Support Vector Machine (SVM)
+        logs_list.append("[EPOCH] Starting Model 1/3: Support Vector Machine (SVM)...")
+        logs_list.append("[INFO] Training SVM with RBF kernel and C=10.0...")
+        save_status(status_filepath, status="training", progress=30, current_epoch=1, total_epochs=3, logs=logs_list)
+        
+        t0 = time.time()
+        svm_model = SVC(kernel='rbf', C=10.0, probability=True, random_state=42)
+        svm_model.fit(X_train, y_train)
+        t_svm = time.time() - t0
+        
+        svm_results = compute_model_metrics(svm_model, X_test, y_test, selected_classes)
+        model_metrics["svm"] = svm_results
+        
+        with open(os.path.join(models_dir, "svm_model.pkl"), 'wb') as f:
+            pickle.dump(svm_model, f)
+            
+        plot_confusion_matrix_img(np.array(svm_results['confusion_matrix']['matrix']), selected_classes, 'SVM Confusion Matrix', os.path.join(models_dir, 'confusion_matrix_svm.png'))
+        plot_roc_curves_img(svm_results['roc_auc'], 'SVM ROC Curves', os.path.join(models_dir, 'roc_curve_svm.png'))
+        
+        logs_list.append(f"[METRIC] SVM complete in {t_svm:.2f}s | Test Accuracy: {svm_results['overall']['accuracy']*100:.2f}%")
+        
+        history.append({
+            "epoch": 1,
+            "loss": float(1.0 - svm_results['overall']['accuracy']),
+            "accuracy": float(svm_results['overall']['accuracy']),
+            "val_loss": 0.0,
+            "val_accuracy": float(svm_results['overall']['accuracy'])
+        })
+        save_status(status_filepath, status="training", progress=55, current_epoch=1, total_epochs=3, 
+                    metrics={"loss": 1.0 - svm_results['overall']['accuracy'], "accuracy": svm_results['overall']['accuracy'], "val_loss": 0.0, "val_accuracy": svm_results['overall']['accuracy']},
+                    history=history, logs=logs_list)
+        
+        # 3. Train K-Nearest Neighbors (KNN)
+        logs_list.append("[EPOCH] Starting Model 2/3: K-Nearest Neighbors (KNN)...")
+        logs_list.append("[INFO] Training KNN with n_neighbors=5...")
+        save_status(status_filepath, status="training", progress=60, current_epoch=2, total_epochs=3, logs=logs_list, history=history)
+        
+        t0 = time.time()
         knn_model = KNeighborsClassifier(n_neighbors=5)
-        dt_model = DecisionTreeClassifier(random_state=42, max_depth=8)
+        knn_model.fit(X_train, y_train)
+        t_knn = time.time() - t0
         
-        svm_model.fit(X_train_scaled, y_train)
-        knn_model.fit(X_train_scaled, y_train)
-        dt_model.fit(X_train_scaled, y_train)
+        knn_results = compute_model_metrics(knn_model, X_test, y_test, selected_classes)
+        model_metrics["knn"] = knn_results
         
-        # 4. Evaluate Models on Test Set
-        progress_callback.log("[INFO] Running model evaluations on independent test split...", progress=90)
+        with open(os.path.join(models_dir, "knn_model.pkl"), 'wb') as f:
+            pickle.dump(knn_model, f)
+            
+        plot_confusion_matrix_img(np.array(knn_results['confusion_matrix']['matrix']), selected_classes, 'KNN Confusion Matrix', os.path.join(models_dir, 'confusion_matrix_knn.png'))
+        plot_roc_curves_img(knn_results['roc_auc'], 'KNN ROC Curves', os.path.join(models_dir, 'roc_curve_knn.png'))
         
-        models = {"SVM": svm_model, "KNN": knn_model, "Decision Tree": dt_model}
-        results = {}
+        logs_list.append(f"[METRIC] KNN complete in {t_knn:.2f}s | Test Accuracy: {knn_results['overall']['accuracy']*100:.2f}%")
         
-        for name, model in models.items():
-            preds = model.predict(X_test_scaled)
-            probs = model.predict_proba(X_test_scaled)
-            
-            acc = float(accuracy_score(y_test, preds))
-            prec = float(precision_score(y_test, preds, average='weighted', zero_division=0))
-            rec = float(recall_score(y_test, preds, average='weighted', zero_division=0))
-            f1 = float(f1_score(y_test, preds, average='weighted', zero_division=0))
-            
-            # Confusion Matrix
-            cm = confusion_matrix(y_test, preds, labels=list(range(len(selected_classes))))
-            
-            # Calculate Class-wise CSI (Classification Success Index)
-            # CSI_i = TP_i / (TP_i + FP_i + FN_i)
-            csis = []
-            for i in range(len(selected_classes)):
-                tp = cm[i, i]
-                fp = np.sum(cm[:, i]) - tp
-                fn = np.sum(cm[i, :]) - tp
-                denominator = tp + fp + fn
-                csis.append(float(tp / denominator) if denominator > 0 else 0.0)
-                
-            macro_csi = float(np.mean(csis))
-            
-            results[name] = {
-                "accuracy": acc,
-                "precision": prec,
-                "recall": rec,
-                "f1_score": f1,
-                "csi": macro_csi,
-                "confusion_matrix": cm,
-                "probabilities": probs,
-                "predictions": preds
-            }
-            
-            progress_callback.log(f"[METRIC] {name} -> Acc: {acc*100:.2f}% | F1: {f1*100:.2f}% | CSI: {macro_csi*100:.2f}%", progress=92)
-            
-        # 5. Select Best Model (Decision Tree as selected in the paper, or dynamically chosen by F1-score)
-        # We will save the Decision Tree model as the active deployed model, matching the paper's best model recommendation.
-        best_model_name = "Decision Tree"
-        best_model = dt_model
-        best_eval = results[best_model_name]
+        history.append({
+            "epoch": 2,
+            "loss": float(1.0 - knn_results['overall']['accuracy']),
+            "accuracy": float(knn_results['overall']['accuracy']),
+            "val_loss": 0.0,
+            "val_accuracy": float(knn_results['overall']['accuracy'])
+        })
+        save_status(status_filepath, status="training", progress=80, current_epoch=2, total_epochs=3, 
+                    metrics={"loss": 1.0 - knn_results['overall']['accuracy'], "accuracy": knn_results['overall']['accuracy'], "val_loss": 0.0, "val_accuracy": knn_results['overall']['accuracy']},
+                    history=history, logs=logs_list)
         
-        progress_callback.log(f"[SUCCESS] Saving best performing model ({best_model_name}) to models/soil_model.joblib...", progress=95)
+        # 4. Train Decision Tree (DT)
+        logs_list.append("[EPOCH] Starting Model 3/3: Decision Tree (DT)...")
+        logs_list.append("[INFO] Training Decision Tree with max_depth=12...")
+        save_status(status_filepath, status="training", progress=85, current_epoch=3, total_epochs=3, logs=logs_list, history=history)
         
-        # Save pipeline: both scaler and classifier together
-        pipeline = {
-            "scaler": scaler,
-            "model": best_model,
-            "classes": selected_classes
-        }
-        joblib.dump(pipeline, model_filepath)
+        t0 = time.time()
+        dt_model = DecisionTreeClassifier(max_depth=12, random_state=42)
+        dt_model.fit(X_train, y_train)
+        t_dt = time.time() - t0
         
-        # 6. Generate ROC Curve & AUC calculations (One-vs-Rest)
-        roc_auc_data = {}
-        y_test_bin = np.zeros((len(y_test), len(selected_classes)))
-        for i in range(len(y_test)):
-            y_test_bin[i, y_test[i]] = 1
-            
-        probs_best = best_eval["probabilities"]
+        dt_results = compute_model_metrics(dt_model, X_test, y_test, selected_classes)
+        model_metrics["dt"] = dt_results
         
-        for i, cls in enumerate(selected_classes):
-            # Compute ROC
-            if len(np.unique(y_test_bin[:, i])) > 1:
-                fpr, tpr, _ = roc_curve(y_test_bin[:, i], probs_best[:, i])
-                roc_auc = float(auc(fpr, tpr))
-                fpr_ds, tpr_ds = downsample_curve(fpr, tpr, n_points=50)
-            else:
-                fpr_ds, tpr_ds = [0.0, 1.0], [0.0, 1.0]
-                roc_auc = 0.5
-                
-            roc_auc_data[cls] = {
-                "fpr": fpr_ds,
-                "tpr": tpr_ds,
-                "auc": roc_auc
-            }
+        with open(os.path.join(models_dir, "dt_model.pkl"), 'wb') as f:
+            pickle.dump(dt_model, f)
             
-        # 7. Generate Training History curves
-        # Since classical ML doesn't have training epochs, we simulate a learning curve (varying dataset size)
-        # to plot accuracy and loss progression. This satisfies Chart.js.
-        history_epochs = list(range(1, epochs + 1))
-        hist_acc = []
-        hist_loss = []
-        hist_val_acc = []
-        hist_val_loss = []
+        plot_confusion_matrix_img(np.array(dt_results['confusion_matrix']['matrix']), selected_classes, 'Decision Tree Confusion Matrix', os.path.join(models_dir, 'confusion_matrix_dt.png'))
+        plot_roc_curves_img(dt_results['roc_auc'], 'Decision Tree ROC Curves', os.path.join(models_dir, 'roc_curve_dt.png'))
         
-        # Compute dynamic points based on sizes
-        sizes = np.linspace(0.1, 1.0, epochs)
-        for size in sizes:
-            # Subset training data
-            n_samples = max(int(len(X_train_scaled) * size), 5)
-            X_sub = X_train_scaled[:n_samples]
-            y_sub = y_train[:n_samples]
+        logs_list.append(f"[METRIC] Decision Tree complete in {t_dt:.2f}s | Test Accuracy: {dt_results['overall']['accuracy']*100:.2f}%")
+        
+        history.append({
+            "epoch": 3,
+            "loss": float(1.0 - dt_results['overall']['accuracy']),
+            "accuracy": float(dt_results['overall']['accuracy']),
+            "val_loss": 0.0,
+            "val_accuracy": float(dt_results['overall']['accuracy'])
+        })
+        
+        # 5. Plot Comparison and Save
+        logs_list.append("[INFO] Saving comparison chart to models/performance_comparison.png...")
+        plot_comparison(svm_results['overall'], knn_results['overall'], dt_results['overall'], os.path.join(models_dir, 'performance_comparison.png'))
+        
+        # Determine best model
+        best_name = "svm"
+        best_f1 = svm_results['overall']['f1_score']
+        if knn_results['overall']['f1_score'] > best_f1:
+            best_name = "knn"
+            best_f1 = knn_results['overall']['f1_score']
+        if dt_results['overall']['f1_score'] > best_f1:
+            best_name = "dt"
+            best_f1 = dt_results['overall']['f1_score']
             
-            # Temporary fit
-            temp_model = DecisionTreeClassifier(random_state=42, max_depth=8)
-            temp_model.fit(X_sub, y_sub)
-            
-            # Predict
-            train_preds = temp_model.predict(X_sub)
-            val_preds = temp_model.predict(X_val_scaled)
-            
-            t_acc = accuracy_score(y_sub, train_preds)
-            v_acc = accuracy_score(y_val, val_preds)
-            
-            hist_acc.append(float(t_acc))
-            hist_val_acc.append(float(v_acc))
-            # Loss can be modeled as (1.0 - accuracy) for simplicity
-            hist_loss.append(float(1.0 - t_acc))
-            hist_val_loss.append(float(1.0 - v_acc))
-            
-        # Collect final metrics JSON
+        best_results = model_metrics[best_name]
+        
         metrics_summary = {
-            "overall": {
-                "accuracy": best_eval["accuracy"],
-                "precision": best_eval["precision"],
-                "recall": best_eval["recall"],
-                "f1_score": best_eval["f1_score"],
-                "csi": best_eval["csi"]
+            "models": model_metrics,
+            "comparison": {
+                "classes": ["SVM", "KNN", "Decision Tree"],
+                "accuracy": [svm_results['overall']['accuracy'], knn_results['overall']['accuracy'], dt_results['overall']['accuracy']],
+                "precision": [svm_results['overall']['precision'], knn_results['overall']['precision'], dt_results['overall']['precision']],
+                "recall": [svm_results['overall']['recall'], knn_results['overall']['recall'], dt_results['overall']['recall']],
+                "f1_score": [svm_results['overall']['f1_score'], knn_results['overall']['f1_score'], dt_results['overall']['f1_score']]
             },
-            "confusion_matrix": {
-                "classes": selected_classes,
-                "matrix": best_eval["confusion_matrix"].tolist()
-            },
-            "roc_auc": roc_auc_data,
+            "overall": best_results["overall"],
+            "confusion_matrix": best_results["confusion_matrix"],
+            "roc_auc": best_results["roc_auc"],
             "training_history": {
-                "epochs": history_epochs,
-                "accuracy": hist_acc,
-                "loss": hist_loss,
-                "val_accuracy": hist_val_acc,
-                "val_loss": hist_val_loss
+                "epochs": [1, 2, 3],
+                "accuracy": [svm_results['overall']['accuracy'], knn_results['overall']['accuracy'], dt_results['overall']['accuracy']],
+                "loss": [1.0 - svm_results['overall']['accuracy'], 1.0 - knn_results['overall']['accuracy'], 1.0 - dt_results['overall']['accuracy']],
+                "val_accuracy": [svm_results['overall']['accuracy'], knn_results['overall']['accuracy'], dt_results['overall']['accuracy']],
+                "val_loss": [1.0 - svm_results['overall']['accuracy'], 1.0 - knn_results['overall']['accuracy'], 1.0 - dt_results['overall']['accuracy']]
             }
         }
         
         with open(metrics_filepath, 'w') as f:
             json.dump(metrics_summary, f, indent=2)
             
-        progress_callback.log(f"[SUCCESS] Model training and evaluation successfully completed!", progress=100, status="completed")
-        print("Model training and evaluation successfully completed!")
+        logs_list.append(f"[SUCCESS] All model training and evaluations compiled.")
+        logs_list.append(f"[SUCCESS] Best Model: {best_name.upper()} (F1: {best_f1*100:.2f}%)")
+        
+        save_status(status_filepath, status="completed", progress=100, current_epoch=3, total_epochs=3,
+                    metrics=best_results["overall"], history=history, logs=logs_list)
+        
+        print("ML Model training and evaluation successfully completed!")
         
     except Exception as e:
         error_msg = str(e)
@@ -293,17 +430,17 @@ def train_and_evaluate(selected_classes, epochs=10, batch_size=32, learning_rate
                 "status": "failed",
                 "progress": 0,
                 "error": error_msg,
-                "logs": progress_callback.logs_list + [f"[ERROR] Exception occurred: {error_msg}"]
+                "logs": logs_list + [f"[ERROR] Exception occurred: {error_msg}"]
             }
             with open(status_filepath, 'w') as f:
                 json.dump(status_err, f, indent=2)
-        except:
+        except Exception:
             pass
         raise e
 
 if __name__ == '__main__':
     classes = ['Black Soil', 'Cinder Soil', 'Laterite Soil', 'Loam Soil', 'Peat Soil', 'Yellow Soil']
     try:
-        train_and_evaluate(classes, epochs=10)
+        train_and_evaluate(classes)
     except Exception as e:
-        print(f"Test run failed: {e}")
+        print(f"Run failed: {e}")

@@ -2,6 +2,8 @@ import os
 import json
 import threading
 import uuid
+import io
+import pickle
 from typing import List, Optional
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -9,13 +11,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import numpy as np
 from PIL import Image
-import joblib
-import tempfile
 
 # Import local modules
 from split_dataset import split_data
-from train_model import train_and_evaluate
-from feature_extractor import extract_all_features_dict, get_feature_vector_by_setting
+from train_model import train_and_evaluate, extract_features
 
 app = FastAPI(title="TerraCNN - Soil Image Classification API")
 
@@ -23,15 +22,7 @@ app = FastAPI(title="TerraCNN - Soil Image Classification API")
 from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:8080",
-        "http://127.0.0.1:8080",
-        "http://127.0.0.1:5500",   # VS Code Live Server
-        "http://localhost:5500",
-        # Add your Vercel URL here after deployment, e.g.:
-        # "https://soil-test.vercel.app",
-        "*",  # Temporarily allow all origins — replace with specific Vercel URL in production
-    ],
+    allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -39,17 +30,25 @@ app.add_middleware(
 
 # Configuration paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATASET_DIR = os.path.join(BASE_DIR, "DataSet", "Soil Dataset")
+DATASET_DIR = os.path.join(BASE_DIR, "DataSet")
 SPLIT_DIR = os.path.join(BASE_DIR, "dataset_split")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 STATUS_FILE = os.path.join(MODELS_DIR, "training_status.json")
 METRICS_FILE = os.path.join(MODELS_DIR, "soil_metrics.json")
-MODEL_FILE = os.path.join(MODELS_DIR, "soil_model.joblib")
 
-# Global variables to cache the loaded model and classes
-cached_model = None
+# Pickled model paths
+SVM_MODEL_FILE = os.path.join(MODELS_DIR, "svm_model.pkl")
+KNN_MODEL_FILE = os.path.join(MODELS_DIR, "knn_model.pkl")
+DT_MODEL_FILE = os.path.join(MODELS_DIR, "dt_model.pkl")
+
+# Global variables to cache the loaded models and classes
+cached_models = {
+    "svm": None,
+    "knn": None,
+    "dt": None
+}
 cached_classes = []
-cached_model_mtime = 0
+cached_models_mtime = 0
 
 # Descriptions for soil classes to make predictions rich and professional
 SOIL_DESCRIPTIONS = {
@@ -92,32 +91,41 @@ class TrainRequest(BaseModel):
     learning_rate: float = Field(0.001, ge=0.00001, le=0.1, description="Learning rate for Adam optimizer")
 
 # Helper function to check model cache and reload if needed
-def get_model():
-    global cached_model, cached_classes, cached_model_mtime
+def get_model(model_type="svm"):
+    global cached_models, cached_classes, cached_models_mtime
     
-    if not os.path.exists(MODEL_FILE) or not os.path.exists(METRICS_FILE):
+    model_files = {
+        "svm": SVM_MODEL_FILE,
+        "knn": KNN_MODEL_FILE,
+        "dt": DT_MODEL_FILE
+    }
+    
+    target_file = model_files.get(model_type)
+    if not target_file or not os.path.exists(target_file) or not os.path.exists(METRICS_FILE):
         return None, []
         
-    mtime = os.path.getmtime(MODEL_FILE)
-    if cached_model is None or mtime > cached_model_mtime:
+    mtime = os.path.getmtime(target_file)
+    if cached_models[model_type] is None or mtime > cached_models_mtime:
         try:
-            print("Loading joblib model pipeline from disk...")
-            pipeline = joblib.load(MODEL_FILE)
-            cached_model = pipeline # holds the scaler and the classifier model
-            cached_classes = pipeline["classes"]
-            cached_model_mtime = mtime
-            print(f"Model loaded successfully with classes: {cached_classes}")
+            print(f"Loading pickled {model_type} model from disk...")
+            with open(target_file, 'rb') as f:
+                cached_models[model_type] = pickle.load(f)
+            with open(METRICS_FILE, 'r') as f:
+                metrics_data = json.load(f)
+                cached_classes = metrics_data["confusion_matrix"]["classes"]
+            cached_models_mtime = mtime
+            print(f"Model {model_type} loaded successfully with classes: {cached_classes}")
         except Exception as e:
-            print(f"Error loading model: {e}")
+            print(f"Error loading {model_type} model: {e}")
             return None, []
             
-    return cached_model, cached_classes
+    return cached_models[model_type], cached_classes
 
 @app.get("/api/classes")
 def get_available_classes():
     if not os.path.exists(DATASET_DIR):
         # Fallback to model classes if loaded, or soil descriptions
-        pipeline, classes = get_model()
+        _, classes = get_model("svm")
         if classes:
             return {"classes": sorted(classes)}
         return {"classes": sorted(list(SOIL_DESCRIPTIONS.keys()))}
@@ -174,7 +182,6 @@ async def upload_dataset_images(class_name: str = Form(...), files: List[UploadF
         if ext not in valid_extensions:
             continue
             
-        # Use sanitized original filename to prevent duplicate UUID accumulation
         safe_name = os.path.basename(file.filename)
         if not safe_name:
             safe_name = f"upload_{uuid.uuid4().hex}{ext}"
@@ -229,7 +236,7 @@ def train_model(req: TrainRequest, background_tasks: BackgroundTasks):
         "status": "training",
         "progress": 0,
         "current_epoch": 0,
-        "total_epochs": req.epochs,
+        "total_epochs": 3,
         "metrics": {"loss": 0.0, "accuracy": 0.0, "val_loss": 0.0, "val_accuracy": 0.0},
         "history": []
     }
@@ -261,43 +268,28 @@ def get_metrics():
         raise HTTPException(status_code=500, detail=f"Failed to read metrics: {str(e)}")
 
 @app.post("/api/predict")
-async def predict_image(file: UploadFile = File(...)):
-    pipeline, classes = get_model()
-    if pipeline is None:
-        raise HTTPException(status_code=400, detail="Model is not trained or loaded. Please train a model first.")
+async def predict_image(file: UploadFile = File(...), model_type: str = Form("svm")):
+    model, classes = get_model(model_type)
+    if model is None:
+        raise HTTPException(status_code=400, detail=f"Model '{model_type}' is not trained or loaded. Please train the models first.")
         
     try:
-        # Read uploaded image content
+        # Load and preprocess image
         image_content = await file.read()
+        image = Image.open(io.BytesIO(image_content)).convert("RGB")
         
-        # Write to temporary file for feature extraction
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as temp_file:
-            temp_file.write(image_content)
-            temp_path = temp_file.name
-            
-        try:
-            # Preprocess and extract features
-            feats_dict = extract_all_features_dict(temp_path)
-            feat_vector = get_feature_vector_by_setting(feats_dict, setting_num=12)
-        finally:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-                
-        # Scale and predict
-        scaler = pipeline["scaler"]
-        classifier = pipeline["model"]
+        # Extract features
+        feats = extract_features(image, img_size=(32, 32))
+        img_batch = np.expand_dims(feats, axis=0) # Add batch dimension (1, 3102)
         
-        feat_vector_scaled = scaler.transform([feat_vector])
-        
-        # Get probabilities and predicted class
-        probs = classifier.predict_proba(feat_vector_scaled)[0]
-        max_idx = int(np.argmax(probs))
-        
+        # Run prediction
+        predictions = model.predict_proba(img_batch)[0]
+        max_idx = int(np.argmax(predictions))
         predicted_class = classes[max_idx]
-        confidence = float(probs[max_idx]) * 100
+        confidence = float(predictions[max_idx]) * 100
         
         # Get matching probabilities for all classes
-        probabilities = {classes[i]: float(probs[i]) * 100 for i in range(len(classes))}
+        probabilities = {classes[i]: float(predictions[i]) * 100 for i in range(len(classes))}
         
         # Get soil description
         soil_info = SOIL_DESCRIPTIONS.get(predicted_class, {
@@ -315,9 +307,6 @@ async def predict_image(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
 
-# Add io import for file processing
-import io
-
 # Serve static files for frontend UI
 static_path = os.path.join(BASE_DIR, "static")
 os.makedirs(static_path, exist_ok=True)
@@ -325,8 +314,4 @@ app.mount("/", StaticFiles(directory=static_path, html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn
-    # Read port from environment variable (required by Render.com)
-    # Falls back to 8080 for local development
-    port = int(os.environ.get("PORT", 8080))
-    host = "0.0.0.0" if os.environ.get("PORT") else "127.0.0.1"
-    uvicorn.run("main:app", host=host, port=port, reload=False)
+    uvicorn.run("main:app", host="127.0.0.1", port=8080, reload=True)

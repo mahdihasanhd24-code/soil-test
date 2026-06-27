@@ -89,9 +89,9 @@ def split_data(source_dir, dest_dir, train_ratio=0.70, val_ratio=0.15, test_rati
     return summary_counts
 
 if __name__ == '__main__':
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    src = os.path.join(base_dir, "DataSet", "Soil Dataset")
-    dst = os.path.join(base_dir, "dataset_split")
+    base_path = os.path.dirname(os.path.abspath(__file__))
+    src = os.path.join(base_path, "DataSet")
+    dst = os.path.join(base_path, "dataset_split")
     try:
         split_data(src, dst)
     except Exception as e:
