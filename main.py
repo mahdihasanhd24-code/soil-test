@@ -116,7 +116,11 @@ def get_model():
 @app.get("/api/classes")
 def get_available_classes():
     if not os.path.exists(DATASET_DIR):
-        raise HTTPException(status_code=404, detail="Soil Dataset directory not found.")
+        # Fallback to model classes if loaded, or soil descriptions
+        pipeline, classes = get_model()
+        if classes:
+            return {"classes": sorted(classes)}
+        return {"classes": sorted(list(SOIL_DESCRIPTIONS.keys()))}
     classes = [d for d in os.listdir(DATASET_DIR) if os.path.isdir(os.path.join(DATASET_DIR, d))]
     return {"classes": sorted(classes)}
 
