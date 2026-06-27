@@ -1,0 +1,32 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Large Keras model file (11.6 MB — too large for free Git)
+# Use Git LFS if you need to store it: git lfs track "*.keras"
+models/soil_model.keras
+
+# Dataset and split folders (can be hundreds of MBs)
+DataSet/
+dataset_split/
+
+# Python virtual environment
+.env
+venv/
+.venv/
+env/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE files
+.vscode/settings.json
+.idea/
+
+# Temporary files
+*.tmp
+*.log

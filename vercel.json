@@ -1,0 +1,5 @@
+{
+  "outputDirectory": "static",
+  "cleanUrls": true,
+  "trailingSlash": false
+}

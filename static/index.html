@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TerraCNN - Soil Classification Dashboard</title>
+    <!-- Outfit Font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css?v=2">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+                </svg>
+                <div class="logo-text">
+                    <h1>TerraCNN</h1>
+                    <span>Soil Classification</span>
+                </div>
+            </div>
+            
+            <nav class="sidebar-menu">
+                <button class="nav-item active" id="nav-classifier" onclick="switchTab('classifier')">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                        <circle cx="12" cy="13" r="4"/>
+                    </svg>
+                    Soil Classifier
+                </button>
+                <button class="nav-item" id="nav-admin" onclick="switchTab('admin')">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                        <line x1="9" y1="3" x2="9" y2="21"/>
+                        <line x1="15" y1="3" x2="15" y2="21"/>
+                        <line x1="3" y1="9" x2="21" y2="9"/>
+                        <line x1="3" y1="15" x2="21" y2="15"/>
+                    </svg>
+                    Admin Dashboard
+                </button>
+            </nav>
+
+            <div class="sidebar-footer">
+                <button class="theme-toggle-btn" id="theme-toggle" onclick="toggleTheme()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                        <circle cx="12" cy="12" r="5"/>
+                        <line x1="12" y1="1" x2="12" y2="3"/>
+                        <line x1="12" y1="21" x2="12" y2="23"/>
+                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+                        <line x1="1" y1="12" x2="3" y2="12"/>
+                        <line x1="21" y1="12" x2="23" y2="12"/>
+                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+                    </svg>
+                    <span id="theme-text">Light Mode</span>
+                </button>
+                <div class="status-indicator">
+                    <div class="status-dot green"></div>
+                    <span id="model-status-text">Checking model...</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- TAB 1: Soil Classifier (User Portal) -->
+            <section id="tab-classifier" class="tab-pane active">
+                <header class="page-header">
+                    <h2>Soil Classification Portal</h2>
+                    <p>Upload a soil sample image to identify its category and suitability index.</p>
+                </header>
+
+                <div class="methodology-banner" style="background: rgba(16, 185, 129, 0.04); border: 1px dashed rgba(16, 185, 129, 0.2); border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem; display: flex; align-items: flex-start; gap: 0.75rem;">
+                    <div style="background: rgba(16, 185, 129, 0.1); border-radius: 6px; padding: 0.35rem; color: #10B981; display: inline-flex; align-items: center; justify-content: center; margin-top: 0.15rem;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"/>
+                            <line x1="12" y1="16" x2="12" y2="12"/>
+                            <line x1="12" y1="8" x2="12.01" y2="8"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h4 style="margin: 0 0 0.25rem 0; color: #10B981; font-size: 0.9rem; font-weight: 600;">System Methodology Overview</h4>
+                        <p style="margin: 0; font-size: 0.85rem; color: var(--color-text-muted); line-height: 1.45;">
+                            First, soil images were collected from the Kaggle dataset. Then data augmentation and preprocessing were performed. After that, color, shape, texture (GLCM and LBP), surface and statistical features were extracted. These features were combined into a feature vector. Then SVM, KNN and Decision Tree models were trained and evaluated. Decision Tree achieved the best and most stable performance. Finally, the trained model was integrated into a web application where users can upload a soil image and get the predicted soil type.
+                        </p>
+                    </div>
+                </div>
+
+                <div class="classifier-layout">
+                    <!-- Upload Panel -->
+                    <div class="panel upload-panel">
+                        <div class="panel-header">
+                            <h3>Soil Sample Upload</h3>
+                        </div>
+                        <div class="panel-body">
+                            <div class="dropzone" id="dropzone">
+                                <input type="file" id="file-input" accept="image/*" style="display: none;">
+                                <div class="dropzone-prompt">
+                                    <svg class="upload-large-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+                                    </svg>
+                                    <p class="main-prompt">Drag & drop soil image here</p>
+                                    <p class="sub-prompt">Supports PNG, JPG, JPEG, WEBP</p>
+                                    <button class="btn btn-secondary" onclick="document.getElementById('file-input').click()">Browse Files</button>
+                                </div>
+                                <div class="dropzone-preview" id="dropzone-preview" style="display: none;">
+                                    <img id="image-preview" src="#" alt="Soil Preview">
+                                    <div class="preview-overlay">
+                                        <button class="btn btn-danger btn-sm" onclick="clearUpload(event)">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                                                <polyline points="3 6 5 6 21 6"/>
+                                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                                            </svg>
+                                            Remove Image
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <button id="btn-analyze" class="btn btn-primary btn-block mt-4" disabled onclick="analyzeSoil()">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                                </svg>
+                                Run Classification Analysis
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Result Panel -->
+                    <div class="panel result-panel" id="result-panel">
+                        <div class="panel-header">
+                            <h3>Classification Analysis Report</h3>
+                        </div>
+                        <div class="panel-body empty-state" id="result-empty-state">
+                            <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                <circle cx="12" cy="12" r="10"/>
+                                <line x1="12" y1="16" x2="12" y2="12"/>
+                                <line x1="12" y1="8" x2="12.01" y2="8"/>
+                            </svg>
+                            <p>Upload and analyze an image to view predictions, confidence scores, and crop suitability.</p>
+                        </div>
+
+                        <div class="panel-body results-container" id="result-content" style="display: none;">
+                            <div class="result-top">
+                                <div class="prediction-info" style="display: flex; align-items: center; gap: 0.75rem;">
+                                    <div>
+                                        <span class="label">Predicted Class</span>
+                                        <h4 id="result-class-name">Clay Soil</h4>
+                                    </div>
+                                    <button class="btn-icon" id="btn-speak" onclick="replaySpeech()" style="background: rgba(255,255,255,0.08); border: none; border-radius: 50%; color: #10B981; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; cursor: pointer; transition: all 0.2s; margin-top: 0.5rem;" onmouseover="this.style.background='rgba(16,185,129,0.15)'; this.style.transform='scale(1.05)'" onmouseout="this.style.background='rgba(255,255,255,0.08)'; this.style.transform='scale(1)'" title="Read Aloud Analysis">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="18" height="18" stroke-linecap="round" stroke-linejoin="round">
+                                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                                            <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                                <div class="confidence-container">
+                                    <svg class="radial-progress" viewBox="0 0 36 36">
+                                        <path class="ring-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                                        <path class="ring-progress" id="result-ring" stroke-dasharray="0, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                                        <text x="18" y="20.35" class="ring-text" id="result-confidence-text">0%</text>
+                                    </svg>
+                                    <span class="label-sub">Confidence Score</span>
+                                </div>
+                            </div>
+
+                            <div class="result-details">
+                                <div class="details-section">
+                                    <h5>
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                                        </svg>
+                                        Soil Description
+                                    </h5>
+                                    <p id="result-desc">Soil description goes here...</p>
+                                </div>
+                                <div class="details-section">
+                                    <h5>
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                                            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
+                                            <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+                                        </svg>
+                                        Key Composition & Properties
+                                    </h5>
+                                    <p id="result-props">Properties description goes here...</p>
+                                </div>
+                                <div class="details-section">
+                                    <h5>
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                                            <circle cx="12" cy="12" r="10"/>
+                                            <path d="M8 12h8"/>
+                                            <path d="M12 8v8"/>
+                                        </svg>
+                                        Crop Suitability & Recommendations
+                                    </h5>
+                                    <p id="result-suitability">Suitability details...</p>
+                                </div>
+                            </div>
+
+                            <div class="all-probabilities-list mt-4">
+                                <h5 class="mb-3">Probability Distribution</h5>
+                                <div id="probabilities-bars-container"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 2: Admin Dashboard -->
+            <section id="tab-admin" class="tab-pane">
+                <header class="page-header">
+                    <h2>Admin Training Panel</h2>
+                    <p>Split datasets, select classes, tune hyperparameters, run CNN training, and view metrics reports.</p>
+                </header>
+
+                <!-- Admin Tab Nav -->
+                <div class="admin-tabs">
+                    <button class="admin-tab active" id="btn-admin-config" onclick="switchAdminSubtab('config')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+                            <circle cx="12" cy="12" r="3"/>
+                        </svg>
+                        Configuration & Data
+                    </button>
+                    <button class="admin-tab" id="btn-admin-train" onclick="switchAdminSubtab('train')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                            <polygon points="5 3 19 12 5 21 5 3"/>
+                        </svg>
+                        Model Training
+                    </button>
+                    <button class="admin-tab" id="btn-admin-metrics" onclick="switchAdminSubtab('metrics')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                            <line x1="18" y1="20" x2="18" y2="10"/>
+                            <line x1="12" y1="20" x2="12" y2="4"/>
+                            <line x1="6" y1="20" x2="6" y2="14"/>
+                        </svg>
+                        Performance Reports
+                    </button>
+                </div>
+
+                <!-- SUBTAB 1: Configuration & Data Split -->
+                <div id="admin-subtab-config" class="admin-subtab-pane active">
+                    <div class="admin-grid">
+                        <!-- Data Split Controller -->
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h3>Dataset Split Controller (70/15/15)</h3>
+                            </div>
+                            <div class="panel-body">
+                                <p class="mb-4">Partitions the images inside the Soil Dataset folder into Train, Validation, and Test subsets respectively. Essential before starting any training run.</p>
+                                <div class="split-stats-summary mb-4" id="split-summary-info">
+                                    <div class="stat-badge">
+                                        <span class="value" id="split-total-classes">0</span>
+                                        <span class="label">Total Classes</span>
+                                    </div>
+                                    <div class="stat-badge">
+                                        <span class="value" id="split-total-images">0</span>
+                                        <span class="label">Total Images</span>
+                                    </div>
+                                </div>
+                                <button class="btn btn-secondary btn-block" onclick="runDatasetSplit()">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                                        <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/>
+                                        <line x1="4" y1="22" x2="4" y2="15"/>
+                                    </svg>
+                                    Execute Dataset Partitioning
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Class Selection Panel -->
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h3>Soil Class Selection</h3>
+                            </div>
+                            <div class="panel-body">
+                                <p class="mb-4">Select which soil categories to include in the training model. Selecting less than 2 is not allowed.</p>
+                                <div class="class-selection-list" id="class-checkboxes-container">
+                                    <!-- Dynamic list of checkboxes -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Split Distribution Table Panel -->
+                    <div class="panel mt-4">
+                        <div class="panel-header">
+                            <h3>Dataset Split Details</h3>
+                        </div>
+                        <div class="panel-body">
+                            <div class="table-container">
+                                <table class="table" id="split-details-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Class Name</th>
+                                            <th>Total Images</th>
+                                            <th>Train (70%)</th>
+                                            <th>Val (15%)</th>
+                                            <th>Test (15%)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="split-table-body">
+                                        <tr>
+                                            <td colspan="5" class="text-center text-muted">No data split calculated yet. Execute partitioning above.</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SUBTAB 2: Model Training -->
+                <div id="admin-subtab-train" class="admin-subtab-pane">
+                    <div class="admin-grid-uneven">
+                        <!-- Left Layout Column -->
+                        <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+                            <!-- Upload Training Images Panel -->
+                            <div class="panel">
+                                <div class="panel-header">
+                                    <h3>Upload Training Images to Classes</h3>
+                                </div>
+                                <div class="panel-body">
+                                    <p class="mb-4">Add images to training directories for model updates. Choose a target soil category, select files, and click "Upload Class Images". You can also create new classes dynamically.</p>
+                                    
+                                    <div class="upload-train-form" id="train-upload-container">
+                                        <div class="form-row" style="display: flex; gap: 1rem; align-items: end; margin-bottom: 1.5rem; flex-wrap: wrap;">
+                                            <div class="form-group" style="flex: 1; min-width: 150px;">
+                                                <label for="upload-class-select">Select or Create Class</label>
+                                                <select id="upload-class-select" class="form-control" onchange="toggleCustomClassInput(this)">
+                                                    <!-- Populated dynamically -->
+                                                </select>
+                                            </div>
+                                            <div class="form-group" id="custom-class-group" style="flex: 1; min-width: 150px; display: none;">
+                                                <label for="upload-custom-class">New Class Name</label>
+                                                <input type="text" id="upload-custom-class" class="form-control" placeholder="e.g. Red Soil">
+                                            </div>
+                                            <div class="form-group" style="flex: 1.5; min-width: 180px;">
+                                                <label>Select Soil Images</label>
+                                                <input type="file" id="train-files-input" class="form-control" multiple accept="image/*">
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="flex-row align-center justify-between" id="upload-actions-row">
+                                            <button class="btn btn-primary btn-sm" id="btn-upload-train-data" onclick="uploadTrainingImages()">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+                                                </svg>
+                                                Upload Class Images
+                                            </button>
+                                        </div>
+                                        
+                                        <div id="upload-session-summary" class="mt-4" style="display: none; flex-direction: column;">
+                                    <div class="flex-row align-center justify-between mb-2" style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                                        <h5 style="font-size: 0.85rem; color: var(--color-text-muted); font-weight: 600; margin: 0;">Staged for Training:</h5>
+                                        <button class="btn btn-secondary btn-sm" onclick="clearUploadSession()" style="padding: 0.25rem 0.5rem; font-size: 0.72rem; border-radius: 6px;">
+                                            Clear Session
+                                        </button>
+                                    </div>
+                                    <div id="upload-summary-text" style="background-color: rgba(255,255,255,0.015); border: 1px solid var(--color-border); border-radius: var(--border-radius); padding: 1rem; width: 100%; display: flex; flex-direction: column; gap: 0.4rem;">
+                                        <!-- Dynamic uploaded files list -->
+                                    </div>
+                                </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Hyperparameters Form & Class Selection -->
+                            <div class="panel">
+                                <div class="panel-header">
+                                    <h3>Training Setup & Configuration</h3>
+                                </div>
+                                <div class="panel-body">
+                                    <div class="form-group mb-3">
+                                        <label for="param-epochs">Training Epochs</label>
+                                        <input type="number" id="param-epochs" class="form-control" value="10" min="1" max="100">
+                                    </div>
+                                    <div class="form-group mb-3">
+                                        <label for="param-batch-size">Batch Size</label>
+                                        <input type="number" id="param-batch-size" class="form-control" value="32" min="8" max="128">
+                                    </div>
+                                    <div class="form-group mb-3">
+                                        <label for="param-lr">Learning Rate</label>
+                                        <select id="param-lr" class="form-control">
+                                            <option value="0.01">0.01</option>
+                                            <option value="0.005">0.005</option>
+                                            <option value="0.001" selected>0.001 (Recommended)</option>
+                                            <option value="0.0005">0.0005</option>
+                                            <option value="0.0001">0.0001</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group mb-4">
+                                        <label>Select Classes to Include in Model</label>
+                                        <div class="class-selection-list" id="class-checkboxes-container" style="max-height: 160px; overflow-y: auto; border: 1px solid var(--color-border); border-radius: var(--border-radius); padding: 0.75rem; background-color: rgba(0,0,0,0.15); margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.5rem;">
+                                            <!-- Populated dynamically -->
+                                        </div>
+                                    </div>
+                                    <button class="btn btn-primary btn-block" id="btn-start-training" onclick="startModelTraining()">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                                            <polygon points="5 3 19 12 5 21 5 3"/>
+                                        </svg>
+                                        Initialize Model Training
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Active Training Progress Panel -->
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h3>Training Monitor</h3>
+                            </div>
+                            <div class="panel-body" id="training-monitor-idle">
+                                <div class="empty-state">
+                                    <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                        <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+                                        <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+                                        <line x1="6" y1="6" x2="6.01" y2="6"/>
+                                        <line x1="6" y1="18" x2="6.01" y2="18"/>
+                                    </svg>
+                                    <p>No active training run. Start training in the parameters panel, or review metrics in the reports tab.</p>
+                                </div>
+                            </div>
+                            <div class="panel-body" id="training-monitor-active" style="display: none;">
+                                <div class="training-status-card mb-4">
+                                    <div class="progress-details mb-2">
+                                        <span class="status-label" id="training-progress-status">Training model...</span>
+                                        <span class="status-percentage" id="training-progress-pct">0%</span>
+                                    </div>
+                                    <div class="progress-bar-container">
+                                        <div class="progress-bar-fill" id="training-progress-fill" style="width: 0%;"></div>
+                                    </div>
+                                    <div class="monitor-kpis mt-3">
+                                        <div class="kpi">
+                                            <span class="label">Epoch</span>
+                                            <span class="value" id="monitor-kpi-epoch">-/-</span>
+                                        </div>
+                                        <div class="kpi">
+                                            <span class="label">Loss</span>
+                                            <span class="value" id="monitor-kpi-loss">-</span>
+                                        </div>
+                                        <div class="kpi">
+                                            <span class="label">Accuracy</span>
+                                            <span class="value" id="monitor-kpi-acc">-</span>
+                                        </div>
+                                        <div class="kpi">
+                                            <span class="label">Val Loss</span>
+                                            <span class="value" id="monitor-kpi-vloss">-</span>
+                                        </div>
+                                        <div class="kpi">
+                                            <span class="label">Val Accuracy</span>
+                                            <span class="value" id="monitor-kpi-vacc">-</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="monitor-charts-grid">
+                                    <div class="monitor-chart-box">
+                                        <h5>Live Training Curves</h5>
+                                        <div style="position: relative; height: 180px;">
+                                            <canvas id="live-training-chart"></canvas>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="terminal-log-container mt-4">
+                                    <div class="terminal-header">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="margin-right: 0.5rem;">
+                                            <polyline points="4 17 10 11 4 5"/>
+                                            <line x1="12" y1="19" x2="20" y2="19"/>
+                                        </svg>
+                                        <span>Training Output Console</span>
+                                    </div>
+                                    <div class="terminal-body" id="training-terminal-logs">
+                                        <div class="log-line system">[SYSTEM] Awaiting training initiation...</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SUBTAB 3: Performance Reports -->
+                <div id="admin-subtab-metrics" class="admin-subtab-pane">
+                    <!-- Loaded Model Summary Alert -->
+                    <div class="panel mb-4">
+                        <div class="panel-body flex-row justify-between align-center p-3">
+                            <div class="flex-row align-center">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" width="20" height="20" class="mr-2">
+                                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                                    <polyline points="22 4 12 14.01 9 11.01"/>
+                                </svg>
+                                <div>
+                                    <strong style="color: var(--color-white);">Active Trained Model Loaded</strong>
+                                    <p class="text-muted text-sm m-0">Evaluation metrics calculated against the 15% independent test set.</p>
+                                </div>
+                            </div>
+                            <div class="classes-pills" id="metrics-classes-pills">
+                                <!-- Dynamic class badges -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- KPI Cards Grid -->
+                    <div class="metrics-kpis-grid mb-4">
+                        <div class="metric-card">
+                            <span class="label">Overall Accuracy</span>
+                            <span class="value" id="kpi-accuracy">0.00%</span>
+                            <p class="desc">Proportion of correct soil classifications.</p>
+                        </div>
+                        <div class="metric-card">
+                            <span class="label">Precision (Weighted)</span>
+                            <span class="value" id="kpi-precision">0.00%</span>
+                            <p class="desc">Measure of classifier precision rate.</p>
+                        </div>
+                        <div class="metric-card">
+                            <span class="label">Recall (Weighted)</span>
+                            <span class="value" id="kpi-recall">0.00%</span>
+                            <p class="desc">Measure of classifier recall ability.</p>
+                        </div>
+                        <div class="metric-card">
+                            <span class="label">F1-Score (Weighted)</span>
+                            <span class="value" id="kpi-f1">0.00%</span>
+                            <p class="desc">Harmonic mean of precision and recall.</p>
+                        </div>
+                    </div>
+
+                    <!-- Performance Diagrams Layout -->
+                    <div class="admin-grid-uneven">
+                        <!-- Confusion Matrix Panel -->
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h3>Confusion Matrix</h3>
+                            </div>
+                            <div class="panel-body">
+                                <p class="text-muted text-sm mb-4">Rows represent True Classes; Columns represent Predicted Classes. Cell color intensity displays percentage frequency.</p>
+                                <div class="confusion-matrix-wrapper">
+                                    <div class="confusion-matrix-container" id="confusion-matrix-heatmap">
+                                        <!-- Heatmap generated dynamically -->
+                                    </div>
+                                </div>
+                                <div style="display: flex; justify-content: center; margin-top: 1rem;">
+                                    <button class="btn btn-secondary btn-sm" onclick="downloadConfusionMatrix()">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+                                        </svg>
+                                        Download Heatmap Image
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- ROC-AUC Curve Panel -->
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h3>ROC-AUC Report</h3>
+                            </div>
+                            <div class="panel-body">
+                                <p class="text-muted text-sm mb-4">One-vs-Rest Receiver Operating Characteristic curves per selected class with calculated AUC scores.</p>
+                                <div style="position: relative; height: 320px; width: 100%;">
+                                    <canvas id="roc-chart"></canvas>
+                                </div>
+                                <div style="display: flex; justify-content: center; margin-top: 1rem;">
+                                    <button class="btn btn-secondary btn-sm" onclick="downloadChart('roc-chart', 'roc_auc_curve.png')">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+                                        </svg>
+                                        Download ROC Image
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Historical Curves Panel -->
+                    <div class="panel mt-4">
+                        <div class="panel-header">
+                            <h3>Model Training History Curves</h3>
+                        </div>
+                        <div class="panel-body admin-grid">
+                            <div>
+                                <h5 class="mb-3">Loss Curves (Training vs. Validation)</h5>
+                                <div style="position: relative; height: 260px; width: 100%;">
+                                    <canvas id="history-loss-chart"></canvas>
+                                </div>
+                                <div style="display: flex; justify-content: center; margin-top: 0.5rem;">
+                                    <button class="btn btn-secondary btn-sm" onclick="downloadChart('history-loss-chart', 'training_validation_loss.png')">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+                                        </svg>
+                                        Download Loss Chart
+                                    </button>
+                                </div>
+                            </div>
+                            <div>
+                                <h5 class="mb-3">Accuracy Curves (Training vs. Validation)</h5>
+                                <div style="position: relative; height: 260px; width: 100%;">
+                                    <canvas id="history-acc-chart"></canvas>
+                                </div>
+                                <div style="display: flex; justify-content: center; margin-top: 0.5rem;">
+                                    <button class="btn btn-secondary btn-sm" onclick="downloadChart('history-acc-chart', 'training_validation_accuracy.png')">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+                                        </svg>
+                                        Download Accuracy Chart
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="toast">
+        <span id="toast-message">Message text</span>
+    </div>
+
+    <script src="app.js?v=3"></script>
+</body>
+</html>
