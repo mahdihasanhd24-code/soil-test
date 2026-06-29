@@ -3,42 +3,115 @@ import json
 import time
 import pickle
 import numpy as np
+import cv2
 from PIL import Image
+from scipy.stats import skew, kurtosis
+from skimage.feature import graycomatrix, graycoprops, local_binary_pattern
 from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.tree import DecisionTreeClassifier
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score, confusion_matrix, roc_curve, auc
 
-def extract_features(img, img_size=(32, 32)):
-    img = img.convert('RGB')
+def extract_features(img, img_size=(250, 250)):
+    # Convert PIL Image to RGB numpy array
+    img_rgb = np.array(img.convert('RGB'))
     
-    # 1. Resize and get raw pixel features
-    img_resized = img.resize(img_size)
-    pixels = np.array(img_resized, dtype=np.float32).flatten() / 255.0
+    # 2.2.1 Resizing
+    img_resized = cv2.resize(img_rgb, img_size)
     
-    # 2. Extract mean and std of R, G, B channels
-    img_np = np.array(img, dtype=np.float32) / 255.0
-    mean_rgb = img_np.mean(axis=(0, 1))
-    std_rgb = img_np.std(axis=(0, 1))
+    # 2.2.2 Grayscale conversion
+    gray = cv2.cvtColor(img_resized, cv2.COLOR_RGB2GRAY)
     
-    # 3. Extract RGB color histograms (8 bins per channel -> 24 features)
-    hist_r, _ = np.histogram(img_np[:,:,0], bins=8, range=(0, 1))
-    hist_g, _ = np.histogram(img_np[:,:,1], bins=8, range=(0, 1))
-    hist_b, _ = np.histogram(img_np[:,:,2], bins=8, range=(0, 1))
+    # 2.2.3 Noise reduction using median filtering
+    median = cv2.medianBlur(gray, 3)
     
-    # Normalize histograms
-    sum_r = np.sum(hist_r)
-    sum_g = np.sum(hist_g)
-    sum_b = np.sum(hist_b)
-    hist_r = hist_r / sum_r if sum_r > 0 else hist_r
-    hist_g = hist_g / sum_g if sum_g > 0 else hist_g
-    hist_b = hist_b / sum_b if sum_b > 0 else hist_b
+    # 2.2.4 Contrast enhancement using histogram equalization
+    equalized = cv2.equalizeHist(median)
     
-    # Combine all features (3072 + 6 + 24 = 3102 features)
-    features = np.concatenate([pixels, mean_rgb, std_rgb, hist_r, hist_g, hist_b])
-    return features
+    # --- Feature Extraction ---
+    
+    # 1. Color Features (from RGB and Grayscale)
+    # RGB Mean and Std (6 features)
+    mean_rgb = img_resized.mean(axis=(0, 1)) / 255.0
+    std_rgb = img_resized.std(axis=(0, 1)) / 255.0
+    # Grayscale Mean and Std (2 features)
+    mean_gray = np.array([gray.mean() / 255.0])
+    std_gray = np.array([gray.std() / 255.0])
+    # Histograms
+    hist_r, _ = np.histogram(img_resized[:,:,0], bins=8, range=(0, 256), density=True)
+    hist_g, _ = np.histogram(img_resized[:,:,1], bins=8, range=(0, 256), density=True)
+    hist_b, _ = np.histogram(img_resized[:,:,2], bins=8, range=(0, 256), density=True)
+    hist_gray, _ = np.histogram(gray, bins=8, range=(0, 256), density=True)
+    
+    color_feats = np.concatenate([mean_rgb, std_rgb, mean_gray, std_gray, hist_r, hist_g, hist_b, hist_gray])
+    
+    # 2. Shape Features (from Thresholded Grayscale Image)
+    _, thresh = cv2.threshold(equalized, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    num_contours = len(contours)
+    if num_contours > 0:
+        areas = [cv2.contourArea(c) for c in contours]
+        perimeters = [cv2.arcLength(c, True) for c in contours]
+        avg_area = np.mean(areas)
+        avg_perimeter = np.mean(perimeters)
+        
+        # Calculate aspect ratio and compactness for largest contour
+        largest_cnt = contours[np.argmax(areas)]
+        x, y, w, h = cv2.boundingRect(largest_cnt)
+        aspect_ratio = float(w) / h if h > 0 else 1.0
+        
+        perimeter_l = cv2.arcLength(largest_cnt, True)
+        area_l = cv2.contourArea(largest_cnt)
+        compactness = (4 * np.pi * area_l) / (perimeter_l ** 2) if perimeter_l > 0 else 1.0
+    else:
+        avg_area = 0.0
+        avg_perimeter = 0.0
+        aspect_ratio = 1.0
+        compactness = 1.0
+        
+    shape_feats = np.array([float(num_contours), avg_area, avg_perimeter, aspect_ratio, compactness])
+    
+    # 3. Texture Features (GLCM)
+    glcm = graycomatrix(equalized, distances=[1, 2], angles=[0, np.pi/4, np.pi/2, 3*np.pi/4], levels=256, symmetric=True, normed=True)
+    contrast = graycoprops(glcm, 'contrast').flatten()
+    correlation = graycoprops(glcm, 'correlation').flatten()
+    energy = graycoprops(glcm, 'energy').flatten()
+    homogeneity = graycoprops(glcm, 'homogeneity').flatten()
+    texture_feats = np.concatenate([contrast, correlation, energy, homogeneity])
+    
+    # 4. LBP Features
+    lbp = local_binary_pattern(equalized, P=8, R=1, method='uniform')
+    hist_lbp, _ = np.histogram(lbp, bins=10, range=(0, 10), density=True)
+    
+    # 5. Surface Features
+    sobelx = cv2.Sobel(equalized, cv2.CV_64F, 1, 0, ksize=3)
+    sobely = cv2.Sobel(equalized, cv2.CV_64F, 0, 1, ksize=3)
+    grad_mag = np.sqrt(sobelx**2 + sobely**2)
+    mean_grad = np.mean(grad_mag)
+    std_grad = np.std(grad_mag)
+    
+    edges = cv2.Canny(equalized, 100, 200)
+    edge_density = np.sum(edges > 0) / (img_size[0] * img_size[1])
+    
+    local_variation = np.std(equalized)
+    surface_feats = np.array([mean_grad, std_grad, edge_density, local_variation])
+    
+    # 6. Statistical Features
+    mean_val = np.mean(equalized)
+    var_val = np.var(equalized)
+    std_val = np.std(equalized)
+    skew_val = skew(equalized.flatten())
+    kurt_val = kurtosis(equalized.flatten())
+    stat_feats = np.array([mean_val, var_val, std_val, skew_val, kurt_val])
+    
+    # Concatenate all features (96 features)
+    features = np.concatenate([color_feats, shape_feats, texture_feats, hist_lbp, surface_feats, stat_feats])
+    return np.nan_to_num(features)
 
-def load_split_dataset(split_dir, split_name, selected_classes, img_size=(32, 32)):
+def load_split_dataset(split_dir, split_name, selected_classes, img_size=(250, 250)):
     X, y = [], []
     directory = os.path.join(split_dir, split_name)
     if not os.path.exists(directory):
@@ -221,11 +294,11 @@ def compute_model_metrics(model, X_test, y_test, selected_classes):
 def train_and_evaluate(selected_classes, epochs=10, batch_size=32, learning_rate=0.001,
                        split_dir=None,
                        models_dir=None):
-    base_path = os.path.dirname(os.path.abspath(__file__))
+    base_dir = os.path.dirname(os.path.abspath(__file__))
     if split_dir is None:
-        split_dir = os.path.join(base_path, "DataSet")
+        split_dir = os.path.join(base_dir, "DataSet")
     if models_dir is None:
-        models_dir = os.path.join(base_path, "models")
+        models_dir = os.path.join(base_dir, "models")
     # If split_dir does not contain train/val/test subfolders, create them by splitting the dataset
     import random, shutil
     required_splits = ['train', 'val', 'test']
@@ -287,7 +360,7 @@ def train_and_evaluate(selected_classes, epochs=10, batch_size=32, learning_rate
         save_status(status_filepath, status="training", progress=30, current_epoch=1, total_epochs=3, logs=logs_list)
         
         t0 = time.time()
-        svm_model = SVC(kernel='rbf', C=10.0, probability=True, random_state=42)
+        svm_model = make_pipeline(StandardScaler(), SVC(kernel='rbf', C=1.0, probability=True, random_state=42))
         svm_model.fit(X_train, y_train)
         t_svm = time.time() - t0
         
@@ -319,7 +392,7 @@ def train_and_evaluate(selected_classes, epochs=10, batch_size=32, learning_rate
         save_status(status_filepath, status="training", progress=60, current_epoch=2, total_epochs=3, logs=logs_list, history=history)
         
         t0 = time.time()
-        knn_model = KNeighborsClassifier(n_neighbors=5)
+        knn_model = make_pipeline(StandardScaler(), KNeighborsClassifier(n_neighbors=5))
         knn_model.fit(X_train, y_train)
         t_knn = time.time() - t0
         
@@ -351,7 +424,7 @@ def train_and_evaluate(selected_classes, epochs=10, batch_size=32, learning_rate
         save_status(status_filepath, status="training", progress=85, current_epoch=3, total_epochs=3, logs=logs_list, history=history)
         
         t0 = time.time()
-        dt_model = DecisionTreeClassifier(max_depth=12, random_state=42)
+        dt_model = DecisionTreeClassifier(max_depth=12, min_samples_leaf=5, random_state=42)
         dt_model.fit(X_train, y_train)
         t_dt = time.time() - t0
         

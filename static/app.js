@@ -152,6 +152,35 @@ async function checkModelStatus() {
         if (res.ok) {
             statusDot.className = 'status-dot green';
             statusText.textContent = 'Active Model Loaded';
+            
+            const data = await res.json();
+            if (data && data.comparison) {
+                const select = document.getElementById('predict-model-select');
+                if (select) {
+                    const accs = data.comparison.accuracy; // [svm, knn, dt]
+                    const svmAcc = (accs[0] * 100).toFixed(1);
+                    const knnAcc = (accs[1] * 100).toFixed(1);
+                    const dtAcc = (accs[2] * 100).toFixed(1);
+                    
+                    let bestIdx = 0;
+                    let maxAcc = accs[0];
+                    for (let i = 1; i < accs.length; i++) {
+                        if (accs[i] > maxAcc) {
+                            maxAcc = accs[i];
+                            bestIdx = i;
+                        }
+                    }
+                    
+                    const svmOpt = select.querySelector('option[value="svm"]');
+                    if (svmOpt) svmOpt.textContent = `Support Vector Machine (SVM) ${bestIdx === 0 ? '- Best ' : ''}(~${svmAcc}% Acc)`;
+                    
+                    const knnOpt = select.querySelector('option[value="knn"]');
+                    if (knnOpt) knnOpt.textContent = `K-Nearest Neighbors (KNN) ${bestIdx === 1 ? '- Best ' : ''}(~${knnAcc}% Acc)`;
+                    
+                    const dtOpt = select.querySelector('option[value="dt"]');
+                    if (dtOpt) dtOpt.textContent = `Decision Tree (DT) ${bestIdx === 2 ? '- Best ' : ''}(~${dtAcc}% Acc)`;
+                }
+            }
         } else {
             statusDot.className = 'status-dot orange';
             statusText.textContent = 'No Model Trained';

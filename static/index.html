@@ -110,9 +110,9 @@
                             <div class="form-group mt-3 mb-3">
                                 <label for="predict-model-select" style="margin-bottom: 0.4rem; display: block; font-size: 0.82rem; color: var(--color-text-muted); font-weight: 600;">Prediction Classifier Model</label>
                                 <select id="predict-model-select" class="form-control">
-                                    <option value="svm" selected>Support Vector Machine (SVM) - Best (~82% Acc)</option>
-                                    <option value="dt">Decision Tree (DT) - (~79% Acc)</option>
-                                    <option value="knn">K-Nearest Neighbors (KNN) - (~55% Acc)</option>
+                                    <option value="dt" selected>Decision Tree (DT) - Best (~91.3% Acc)</option>
+                                    <option value="svm">Support Vector Machine (SVM) - (~90.9% Acc)</option>
+                                    <option value="knn">K-Nearest Neighbors (KNN) - (~89.1% Acc)</option>
                                 </select>
                             </div>
                             <button id="btn-analyze" class="btn btn-primary btn-block" disabled onclick="analyzeSoil()">

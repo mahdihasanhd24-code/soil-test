@@ -28,6 +28,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # Configuration paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATASET_DIR = os.path.join(BASE_DIR, "DataSet")
@@ -279,8 +280,8 @@ async def predict_image(file: UploadFile = File(...), model_type: str = Form("sv
         image = Image.open(io.BytesIO(image_content)).convert("RGB")
         
         # Extract features
-        feats = extract_features(image, img_size=(32, 32))
-        img_batch = np.expand_dims(feats, axis=0) # Add batch dimension (1, 3102)
+        feats = extract_features(image, img_size=(250, 250))
+        img_batch = np.expand_dims(feats, axis=0) # Add batch dimension (1, 96)
         
         # Run prediction
         predictions = model.predict_proba(img_batch)[0]
